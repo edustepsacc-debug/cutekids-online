@@ -1547,6 +1547,10 @@ const I18N = {
   toast_creating_account:{en:"Creating account…", ar:"جارٍ إنشاء الحساب…"},
   toast_added_with_credentials:{en:"Account created — username: {username}, password: {password}", ar:"تم إنشاء الحساب — اسم المستخدم: {username}، كلمة المرور: {password}"},
   toast_create_account_failed:{en:"Couldn't create the account. Try again.", ar:"تعذّر إنشاء الحساب. حاول مرة أخرى."},
+  account_create_failed_title:{en:"Couldn't Create the Account", ar:"تعذّر إنشاء الحساب"},
+  account_create_failed_note:{en:"This stayed on screen instead of a toast so you can read it or send a screenshot to whoever manages the site — it's the technical reason the server gave, not something to act on yourself.", ar:"بقيت هذه الرسالة على الشاشة بدل أن تختفي سريعًا حتى تتمكن من قراءتها أو إرسال لقطة شاشة لمن يدير الموقع — هذا هو السبب التقني الذي أعطاه الخادم، وليس شيئًا عليك التعامل معه بنفسك."},
+  account_create_failed_detail_label:{en:"Technical detail", ar:"التفاصيل التقنية"},
+  csv_import_some_failed:{en:"{n} of {total} accounts couldn't be created — last error shown below:", ar:"تعذّر إنشاء {n} من أصل {total} حساب — آخر خطأ موضح أدناه:"},
   account_created_title:{en:"Account Created", ar:"تم إنشاء الحساب"},
   account_created_note:{en:"Write these down now — this screen won't show again. The person can change their own password later from Settings.", ar:"دوّن هذه البيانات الآن — لن تظهر هذه الشاشة مرة أخرى. يمكن للشخص تغيير كلمة مروره لاحقًا من الإعدادات."},
   copy_btn:{en:"Copy", ar:"نسخ"},
@@ -8019,7 +8023,11 @@ async function addUser(presetRole, presetClassId){
     render();
     openAccountCreatedModal({ name, username, password: NEW_USER_DEFAULT_PASSWORD });
   }catch(e){
-    toast(T("toast_create_account_failed"));
+    // Was a toast that vanished after 2.6s with no detail — on a flaky or
+    // restricted connection (e.g. a signup getting blocked/rate-limited on
+    // one network but not another) that left nothing for the person hitting
+    // it to relay back. This modal stays open and shows the actual reason.
+    openAccountCreateFailedModal(e.message || "unknown_error");
   }
 }
 
@@ -8046,6 +8054,27 @@ function openAccountCreatedModal({name, username, password}){
       <div style="display:flex; gap:8px; align-items:center;">
         <p class="grade-fig" style="font-size:13.5px; flex:1; margin:0;">${escapeHtml(password)}</p>
         <button class="btn small" onclick="copyToClipboard('${escapeHtml(password).replace(/'/g,"\\'")}')">${T("copy_btn")}</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn primary" onclick="closeModal()">${T("close_btn")}</button>
+    </div>
+  `);
+}
+
+/* Shown instead of the old failure toast when creating an account throws —
+   stays open (unlike a toast) so whoever hit it, including someone on a
+   remote/restricted network who can't open the browser console, can read
+   the technical detail or screenshot it and send it back to an admin. */
+function openAccountCreateFailedModal(detail){
+  openModal(`
+    <div class="modal-head"><h3>${T("account_create_failed_title")}</h3><button class="modal-close" onclick="closeModal()" aria-label="${T('close_btn')}">×</button></div>
+    <p style="font-size:12.5px; color:var(--text-muted); line-height:1.6; margin-bottom:14px;">${T("account_create_failed_note")}</p>
+    <div class="field">
+      <label>${T("account_create_failed_detail_label")}</label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <p class="grade-fig" style="font-size:12.5px; flex:1; margin:0; word-break:break-word;" dir="ltr">${escapeHtml(detail)}</p>
+        <button class="btn small" onclick="copyToClipboard('${escapeHtml(detail).replace(/'/g,"\\'")}')">${T("copy_btn")}</button>
       </div>
     </div>
     <div class="modal-actions">
@@ -8166,6 +8195,7 @@ async function confirmCsvImport(){
   closeModal();
   toast(T("toast_creating_account"));
   let created = 0;
+  let lastFailDetail = null;
   // Signed up one at a time (not in parallel) so a taken-username retry on
   // one row never races with another row picking the same fallback name.
   for(const r of validRows){
@@ -8176,11 +8206,25 @@ async function confirmCsvImport(){
       });
       if(r.role==="student" && r.classId){ const cls = classById(r.classId); if(cls) cls.students.push(id); }
       created++;
-    }catch(e){ /* keep going — report the count that actually succeeded */ }
+    }catch(e){ lastFailDetail = e.message || "unknown_error"; /* keep going — report the count that actually succeeded */ }
   }
   await loadAllData();
   csvImportRows = [];
   render();
+  const failedCount = validRows.length - created;
+  // One combined modal rather than two sequential openModal() calls — modal
+  // state is a single slot, so a second open would silently replace the
+  // first before anyone saw it. Partial failures get folded into the same
+  // success modal instead of being lost that way.
+  const failureBlock = failedCount>0 ? `
+      <div class="field">
+        <label>${T("account_create_failed_detail_label")}</label>
+        <p style="font-size:12.5px; color:var(--text-muted); line-height:1.6; margin:0 0 6px;">${T("csv_import_some_failed",{n:failedCount, total:validRows.length})}</p>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <p class="grade-fig" style="font-size:12.5px; flex:1; margin:0; word-break:break-word;" dir="ltr">${escapeHtml(lastFailDetail)}</p>
+          <button class="btn small" onclick="copyToClipboard('${escapeHtml(lastFailDetail).replace(/'/g,"\\'")}')">${T("copy_btn")}</button>
+        </div>
+      </div>` : "";
   if(created>0){
     openModal(`
       <div class="modal-head"><h3>${T("csv_import_done",{n:created})}</h3><button class="modal-close" onclick="closeModal()" aria-label="${T('close_btn')}">×</button></div>
@@ -8192,10 +8236,13 @@ async function confirmCsvImport(){
           <button class="btn small" onclick="copyToClipboard('${NEW_USER_DEFAULT_PASSWORD.replace(/'/g,"\\'")}')">${T("copy_btn")}</button>
         </div>
       </div>
+      ${failureBlock}
       <div class="modal-actions">
         <button class="btn primary" onclick="closeModal()">${T("close_btn")}</button>
       </div>
     `);
+  }else if(failedCount>0){
+    openAccountCreateFailedModal(lastFailDetail);
   }else{
     toast(T("csv_import_done",{n:created}));
   }
