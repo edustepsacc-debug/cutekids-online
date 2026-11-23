@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html data-theme="light"></html>>
+<html data-theme="light">
 <head>
 <meta charset="utf-8">
 <!-- This site is hosted on Netlify. Anyone can build and deploy a site
@@ -2107,18 +2107,6 @@ function teachingOptionsGrouped(entries, valueFn, labelFn){
   }).join("");
 }
 
-const SUBJECT_CATALOG = [
-  {en:"Mathematics", ar:"الرياضيات"},
-  {en:"Science", ar:"العلوم"},
-  {en:"Arabic Language", ar:"اللغة العربية"},
-  {en:"English Language", ar:"اللغة الإنجليزية"},
-  {en:"Islamic Studies", ar:"التربية الإسلامية"},
-  {en:"Social Studies", ar:"الدراسات الاجتماعية"},
-  {en:"Computer Science", ar:"الحاسب الآلي"},
-  {en:"Art", ar:"التربية الفنية"},
-  {en:"Physical Education", ar:"التربية البدنية"},
-];
-
 /* ---------------------------- timetable ---------------------------- */
 const DAYS = [
   {key:"sun", en:"Sunday", ar:"الأحد"},
@@ -2723,6 +2711,35 @@ function certAcademicYearLabel(){
    exists for that class. */
 function subjectsForClass(classId){
   return COURSES.filter(c=>c.classId===classId);
+}
+// The subjects a teacher can be assigned to teach (Timetable, the Manage ->
+// teaching-assignments picker, and Schedule Online Class) are these same
+// per-class Subjects/Courses, instead of the old fixed catalog that was
+// disconnected from whatever had actually been created in Courses.
+// allSubjectsInUse covers every class, for pickers (the Users subject
+// filter) that aren't class-scoped; both dedupe by title since two
+// different grades can each have their own "Mathematics" course.
+function allSubjectsInUse(){
+  const seen = new Set();
+  return COURSES.filter(c=>{
+    if(seen.has(c.title_en)) return false;
+    seen.add(c.title_en);
+    return true;
+  });
+}
+// Renders a subject <select>'s inner <option>s for a given class, with a
+// disabled placeholder when that class has no subjects set up yet in
+// Courses — used wherever a class picker and a subject picker are paired
+// so picking a class refreshes which subjects are offered.
+function renderSubjectOptionsHtml(classId, selectedEn){
+  const subjects = subjectsForClass(classId);
+  return subjects.length
+    ? subjects.map(c=>`<option value="${escapeHtml(c.title_en)}" ${selectedEn===c.title_en?"selected":""}>${state.lang==="ar"?c.title_ar:c.title_en}</option>`).join("")
+    : `<option value="" disabled>${state.lang==="ar"?"لا توجد مواد لهذا الصف بعد — أضف واحدة من صفحة المواد الدراسية":"No subjects for this class yet — add one from Courses"}</option>`;
+}
+function refreshSubjectOptionsFor(classSelectId, subjectSelectId){
+  const classId = document.getElementById(classSelectId).value;
+  document.getElementById(subjectSelectId).innerHTML = renderSubjectOptionsHtml(classId);
 }
 /* One issued certificate per student — saving again overwrites it in place
    with the fresh marks rather than piling up duplicates, but keeps the
@@ -3592,6 +3609,15 @@ try{
    it's obvious at a glance what staff is excluded from. */
 function isAdminLike(role){ return role==="admin" || role==="staff" || role==="manager"; }
 
+// Manager gets near-full admin parity: Classes, Users and the roster
+// export are all gated through this instead of the literal "admin" role.
+// Permissions stays admin-only on purpose — see the guard in
+// renderPermissionsAdmin for why (it isn't a UI restriction, it's that
+// role-permission writes are admin-only at the database level, so opening
+// the page to manager would let them "save" changes that silently never
+// persist). Staff/instructor stay locked out of all of this, same as before.
+function isAdminOrManager(role){ return role==="admin" || role==="manager"; }
+
 // The three roles the admin can configure section visibility for (item 3:
 // "give the admin the ability to choose what manager, teacher and staff
 // can see and edit"). Student and parent nav is untouched by design — the
@@ -3660,12 +3686,14 @@ function navItems(){
     {key:"calendar", label:T("nav_calendar"), icon:ICONS.calendar},
     {key:"certificate", label:T("nav_certificates"), icon:ICONS.certificate},
   ];
-  // Classes and Users are both ways of browsing/managing individual
-  // accounts, so they stay admin-only even for staff — not affected by
-  // the configurable permissions below.
-  if(state.role==="admin"){
+  // Permissions stays admin-only — not affected by the configurable
+  // permissions below (see isAdminOrManager for why). Classes and Users
+  // are admin-only too, except the manager role is explicitly let in.
+  if(isAdminOrManager(state.role)){
     base.push({key:"classes", label:T("nav_classes"), icon:ICONS.classes});
     base.push({key:"users", label:T("nav_users"), icon:ICONS.users});
+  }
+  if(state.role==="admin"){
     base.push({key:"permissions", label:T("nav_permissions"), icon:ICONS.settings});
   }
   if(isAdminLike(state.role)){
@@ -3786,7 +3814,7 @@ function handleGlobalSearch(query){
   ).slice(0,5);
 
   let people = [];
-  if(state.role==="admin"){
+  if(isAdminOrManager(state.role)){
     people = Object.values(USERS).filter(u=>
       u.name_en.toLowerCase().includes(q) || u.name_ar.includes(q) || (u.username||"").toLowerCase().includes(q)
     ).slice(0,5);
@@ -4640,10 +4668,10 @@ function openScheduleClassModal(){
   openModal(`
     <div class="modal-head"><h3>${T("schedule_class_title")}</h3><button class="modal-close" onclick="closeModal()" aria-label="${T('close_btn')}">×</button></div>
     <div class="field"><label>${T("class_label")}</label>
-      <select id="sched-class">${classOptionsGrouped()}</select>
+      <select id="sched-class" onchange="refreshSubjectOptionsFor('sched-class','sched-subject')">${classOptionsGrouped()}</select>
     </div>
     <div class="field"><label>${T("subject_field_label")}</label>
-      <select id="sched-subject">${SUBJECT_CATALOG.map(s=>`<option value="${escapeHtml(s.en)}">${state.lang==="ar"?s.ar:s.en}</option>`).join("")}</select>
+      <select id="sched-subject">${renderSubjectOptionsHtml(CLASSES[0] ? CLASSES[0].id : "")}</select>
     </div>
     <div class="field"><label>${T("teacher_field_label")}</label>
       <select id="sched-teacher">${teacherIds().map(tid=>`<option value="${tid}">${userName(tid)}</option>`).join("")}</select>
@@ -4680,9 +4708,10 @@ function scheduleOnlineClass(){
   } else {
     classId = document.getElementById("sched-class").value;
     const subjEn = document.getElementById("sched-subject").value;
-    const subj = SUBJECT_CATALOG.find(s=>s.en===subjEn);
-    subjectEn = subj ? subj.en : subjEn;
-    subjectAr = subj ? subj.ar : subjEn;
+    const subj = subjectsForClass(classId).find(s=>s.title_en===subjEn);
+    if(!subj){ toast(state.lang==="ar"?"يرجى اختيار مادة":"Please choose a subject."); return; }
+    subjectEn = subj.title_en;
+    subjectAr = subj.title_ar;
     teacherId = document.getElementById("sched-teacher").value;
   }
 
@@ -7315,8 +7344,8 @@ function renderAnnouncementsHub(){
 /* ---------------------------- admin: classes ---------------------------- */
 function renderClassesAdmin(){
   // Same hard guard as renderUsersAdmin() — this page is really a
-  // per-class roster + "manage account" browser, so it's admin-only too.
-  if(state.role!=="admin") return renderDashboard();
+  // per-class roster + "manage account" browser, so manager is let in too.
+  if(!isAdminOrManager(state.role)) return renderDashboard();
   return `
     <div class="page-head">
       <div><h1>${T("nav_classes")}</h1><div class="sub">${T("classes_page_sub")}</div></div>
@@ -7344,7 +7373,7 @@ function renderClassesAdmin(){
 }
 
 function openClassRoster(classId){
-  if(state.role!=="admin") return;
+  if(!isAdminOrManager(state.role)) return;
   const cls = classById(classId);
   const students = cls.students.map(sid=>USERS[sid]).filter(Boolean);
   openModal(`
@@ -7368,8 +7397,12 @@ function openClassRoster(classId){
 
 /* ---------------------------- admin: role permissions ---------------------------- */
 function renderPermissionsAdmin(){
-  // Hard guard (see renderClassesAdmin/renderUsersAdmin above) — this page
-  // only ever appears in the sidebar for the literal admin, but a direct
+  // Hard guard — this page stays literal-admin-only even though manager
+  // now matches admin almost everywhere else (see isAdminOrManager):
+  // ROLE_PERMISSIONS only ever syncs to Supabase for state.role==="admin"
+  // (its RLS policy is admin-write-only), so a manager "saving" a change
+  // here would look fine locally and then silently vanish on reload. Only
+  // the literal admin role can render this page, and a direct
   // go('permissions') from anywhere else must not render it either.
   if(state.role!=="admin") return renderDashboard();
   const activeRole = PERMISSION_ROLES.includes(state.permissionsRole) ? state.permissionsRole : "manager";
@@ -7745,7 +7778,7 @@ function openEditTimetableCell(classId, dayKey, periodKey){
     <div class="field"><label>${T("subject_field_label")}</label>
       <select id="tt-subject">
         <option value="">${T("no_subject_opt")}</option>
-        ${SUBJECT_CATALOG.map(s=>`<option value="${escapeHtml(s.en)}" ${cell && cell.subjectEn===s.en?"selected":""}>${state.lang==="ar"?s.ar:s.en}</option>`).join("")}
+        ${subjectsForClass(classId).map(s=>`<option value="${escapeHtml(s.title_en)}" ${cell && cell.subjectEn===s.title_en?"selected":""}>${state.lang==="ar"?s.title_ar:s.title_en}</option>`).join("")}
       </select>
     </div>
     <div class="field"><label>${T("teacher_field_label")}</label>
@@ -7768,8 +7801,9 @@ function saveTimetableCell(classId, dayKey, periodKey){
   const teacherId = document.getElementById("tt-teacher").value;
   if(!subjEn){ TIMETABLE[classId][dayKey][periodKey] = null; }
   else{
-    const subj = SUBJECT_CATALOG.find(s=>s.en===subjEn);
-    TIMETABLE[classId][dayKey][periodKey] = { subjectEn: subj.en, subjectAr: subj.ar, teacherId };
+    const subj = subjectsForClass(classId).find(s=>s.title_en===subjEn);
+    if(!subj){ closeModal(); return; }
+    TIMETABLE[classId][dayKey][periodKey] = { subjectEn: subj.title_en, subjectAr: subj.title_ar, teacherId };
     // keep the teacher's assignment list (Users -> Manage) in sync with the grid
     const t = USERS[teacherId];
     if(t){
@@ -7803,10 +7837,11 @@ function clearTimetableCell(classId, dayKey, periodKey){
    everyone. A student gets a class picker on top since a school can have
    many classes; other categories are small enough that search covers it. */
 function renderUsersAdmin(){
-  // Staff is deliberately excluded from the whole Users section — this is a
-  // hard guard, not just a hidden nav item, in case anything ever routes
-  // here without going through the nav button.
-  if(state.role!=="admin") return renderDashboard();
+  // Staff/instructor are deliberately excluded from the whole Users
+  // section (manager is let in) — this is a hard guard, not just a hidden
+  // nav item, in case anything ever routes here without going through the
+  // nav button.
+  if(!isAdminOrManager(state.role)) return renderDashboard();
   const q = (state.usersFilter||"").trim().toLowerCase();
   const roleFilter = state.usersRoleFilter || "all";
   const classFilter = state.usersClassFilter || "";
@@ -7889,7 +7924,7 @@ function renderUsersAdmin(){
       </select>` : ""}
       ${roleFilter==="instructor" ? `<select onchange="setState({usersSubjectFilter:this.value})">
         <option value="">${T("all_subjects_label")}</option>
-        ${SUBJECT_CATALOG.map(s=>`<option value="${escapeHtml(s.en)}" ${subjectFilter===s.en?"selected":""}>${state.lang==="ar"?s.ar:s.en}</option>`).join("")}
+        ${allSubjectsInUse().map(s=>`<option value="${escapeHtml(s.title_en)}" ${subjectFilter===s.title_en?"selected":""}>${state.lang==="ar"?s.title_ar:s.title_en}</option>`).join("")}
       </select>` : ""}
     </div>
     <div class="table-wrap"><table class="data-table">
@@ -7915,7 +7950,7 @@ function renderUsersAdmin(){
 }
 
 function openAddUserModal(presetRole, presetClassId){
-  if(state.role!=="admin") return;
+  if(!isAdminOrManager(state.role)) return;
   const role = presetRole || "student";
   const studentOptions = Object.values(USERS).filter(u=>u.role==="student");
   openModal(`
@@ -8172,7 +8207,7 @@ async function confirmCsvImport(){
 function isLastAdmin(u){ return u.role==="admin" && Object.values(USERS).filter(x=>x.role==="admin").length<=1; }
 
 function openEditUserModal(userId){
-  if(state.role!=="admin") return;
+  if(!isAdminOrManager(state.role)) return;
   const u = USERS[userId];
   const roleLabel = T({student:"role_student", instructor:"role_instructor", admin:"role_admin", parent:"role_parent", staff:"role_staff", manager:"role_manager", itsupport:"role_itsupport"}[u.role]);
   const isCurrentDemoUser = Object.values(CURRENT_USER).includes(userId);
@@ -8420,8 +8455,8 @@ function renderTeachingAssignmentsField(u){
           </div>`).join("") : `<div class="empty-row" style="padding:10px;">${T("teaching_assignments_empty")}</div>`}
       </div>
       <div style="display:flex; gap:8px; margin-top:8px;">
-        <select id="assign-class" style="flex:1;">${classOptionsGrouped()}</select>
-        <select id="assign-subject" style="flex:1;">${SUBJECT_CATALOG.map(s=>`<option value="${escapeHtml(s.en)}">${state.lang==="ar"?s.ar:s.en}</option>`).join("")}</select>
+        <select id="assign-class" style="flex:1;" onchange="refreshSubjectOptionsFor('assign-class','assign-subject')">${classOptionsGrouped()}</select>
+        <select id="assign-subject" style="flex:1;">${renderSubjectOptionsHtml(CLASSES[0] ? CLASSES[0].id : "")}</select>
         <button class="btn small" onclick="addTeachingAssignment('${u.id}')">${T("add_assignment_btn")}</button>
       </div>
     </div>
@@ -8432,10 +8467,11 @@ function addTeachingAssignment(userId){
   const u = USERS[userId];
   const classId = document.getElementById("assign-class").value;
   const subjectEn = document.getElementById("assign-subject").value;
-  const subj = SUBJECT_CATALOG.find(s=>s.en===subjectEn);
+  const subj = subjectsForClass(classId).find(s=>s.title_en===subjectEn);
+  if(!subj){ toast(state.lang==="ar"?"يرجى اختيار مادة":"Please choose a subject."); return; }
   if(!u.teaching) u.teaching = [];
   if(u.teaching.some(a=>a.classId===classId && a.subjectEn===subjectEn)){ toast(T("assignment_exists")); return; }
-  u.teaching.push({classId, subjectEn: subj.en, subjectAr: subj.ar});
+  u.teaching.push({classId, subjectEn: subj.title_en, subjectAr: subj.title_ar});
   toast(T("toast_assignment_added"));
   openEditUserModal(userId);
   render();
@@ -8645,7 +8681,7 @@ function renderReportsAdmin(){
   return `
     <div class="page-head">
       <div><h1>${T("reports_title")}</h1><div class="sub">${termSubLabel()}</div></div>
-      ${state.role==="admin" ? `<button class="btn" onclick="exportRosterCsv()">${ICONS.file}${T("export_roster_btn")}</button>` : ""}
+      ${isAdminOrManager(state.role) ? `<button class="btn" onclick="exportRosterCsv()">${ICONS.file}${T("export_roster_btn")}</button>` : ""}
     </div>
     <div class="chart-card">
       <h3>${T("enrollment_chart")}</h3><div class="chart-sub">${T("enrollment_chart_sub")}</div>
@@ -8674,7 +8710,7 @@ function exportEnrollmentCsv(){
 }
 
 function exportRosterCsv(){
-  if(state.role!=="admin") return;
+  if(!isAdminOrManager(state.role)) return;
   const header = ["ID", "Name", "Role", "Username", "Status", "Class/Children"];
   const body = Object.values(USERS).map(u=>{
     const extra = u.role==="student" ? (classById(u.classId) ? classLabel(classById(u.classId)) : "")
@@ -8775,7 +8811,7 @@ function renderSettingsPage(){
       <div class="chart-sub">${T("settings_my_account_readonly_sub")}</div>
       <div class="field" style="margin-top:12px; margin-bottom:0;"><label>${T("username_label")}</label><p class="grade-fig" style="margin:0; font-size:13.5px;">${escapeHtml(me.username||"—")}</p></div>
       <button class="btn" style="margin-top:12px;" onclick="openChangePasswordModal()">${T("change_password_btn")}</button>
-      ${state.role==="admin" ? `<button class="btn" style="margin-top:12px;" onclick="go('users')">${T("manage_in_users_btn")}</button>` : ""}
+      ${isAdminOrManager(state.role) ? `<button class="btn" style="margin-top:12px;" onclick="go('users')">${T("manage_in_users_btn")}</button>` : ""}
     </div>
 
     <div class="chart-card">
